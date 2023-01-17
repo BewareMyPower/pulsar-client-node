@@ -38,5 +38,5 @@ if [[ ! -f $ROOT_DIR/pulsar-client-node.tar.gz ]]; then
     git archive -o pulsar-client-node.tar.gz HEAD
 fi
 
-docker run -v $PWD:/pulsar-client-node -it $IMAGE \
+docker run -v $PWD:/pulsar-client-node $IMAGE \
     /bin/bash /pulsar-client-node/tests/docker-load-test.sh
