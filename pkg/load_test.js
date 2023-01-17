@@ -21,7 +21,7 @@ const Pulsar = require('../index.js');
 
 (async () => {
   Pulsar.Client.setLogHandler((level, file, line, message) => {
-      console.log('[%s][%s:%d] %s', Pulsar.LogLevel.toString(level), file, line, message);
+    console.log('[%s][%s:%d] %s', Pulsar.LogLevel.toString(level), file, line, message);
   });
 
   // Create a client
