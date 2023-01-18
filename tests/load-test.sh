@@ -23,13 +23,14 @@
 
 set -e
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage $0 <node-image-name>
+if [[ $# -lt 2 ]]; then
+    echo "Usage $0 <node-image-name> <platform>
 
 See https://hub.docker.com/_/node for valid images"
     exit 1
 fi
 IMAGE=$1
+PLATFORM=$2
 
 ROOT_DIR=${ROOT_DIR:-$(git rev-parse --show-toplevel)}
 cd $ROOT_DIR
@@ -38,5 +39,5 @@ if [[ ! -f $ROOT_DIR/pulsar-client-node.tar.gz ]]; then
     git archive -o pulsar-client-node.tar.gz HEAD
 fi
 
-docker run -v $PWD:/pulsar-client-node $IMAGE \
+docker run --platform $2 -v $PWD:/pulsar-client-node $IMAGE \
     /bin/bash /pulsar-client-node/tests/docker-load-test.sh
