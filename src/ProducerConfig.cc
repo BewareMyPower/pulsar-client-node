@@ -21,6 +21,7 @@
 #include "Message.h"
 #include <future>
 #include <map>
+#include "napi.h"
 #include "pulsar/ProducerConfiguration.h"
 
 static const std::string CFG_TOPIC = "topic";
@@ -87,46 +88,33 @@ static std::map<std::string, pulsar::ProducerConfiguration::BatchingType> PRODUC
 };
 
 struct MessageRouterContext {
-  Napi::ThreadSafeFunction jsRouterFunction;
+  Napi::FunctionReference routerFunc;
 };
 
-static int messageRouterTrampoline(pulsar_message_t *msg, pulsar_topic_metadata_t *topicMetadata,
-                                   void *ctx) {
+static int messageRouterTrampoline(pulsar_message_t *msg, pulsar_topic_metadata_t *topicMetadata, void *ctx) {
   printf("test1\n");
   MessageRouterContext *context = static_cast<MessageRouterContext *>(ctx);
   int numPartitions = pulsar_topic_metadata_get_num_partitions(topicMetadata);
-  std::promise<int> promise;
-  std::future<int> future = promise.get_future();
-  auto callback = [msg, numPartitions, &promise](Napi::Env env, Napi::Function jsCallback) {
-    printf("test2\n");
-    Napi::Object jsMessage = Message::NewInstance(Napi::Object::New(env), 
-                                                  std::shared_ptr<pulsar_message_t>(msg, [](pulsar_message_t*){}));
-    Napi::Object jsTopicMetadata = Napi::Object::New(env);
-    jsTopicMetadata.Set("numPartitions", Napi::Number::New(env, numPartitions));
-    try {
-      printf("test3\n");
-      Napi::Value result = jsCallback.Call({jsMessage, jsTopicMetadata});
-      if (result.IsNumber()) {
-        promise.set_value(result.As<Napi::Number>().Int32Value());
-      } else {
-        promise.set_value(numPartitions);
-      }
-    } catch (const Napi::Error& e) {
-      fprintf(stderr, "Error in custom message router: %s\n", e.what());
-      promise.set_value(numPartitions);
+  const auto &env = context->routerFunc.Env();
+  Napi::Object jsMessage = Message::NewInstance(
+      Napi::Object::New(env), std::shared_ptr<pulsar_message_t>(msg, [](pulsar_message_t *) {}));
+  Napi::Number js_arg = Napi::Number::New(env, numPartitions);
+  try {
+    printf("test3\n");
+    Napi::Value result = context->routerFunc.Call({jsMessage, js_arg});
+    printf("test4\n");
+    if (result.IsNumber()) {
+      return result.As<Napi::Number>().Int32Value() % numPartitions;
+    } else {
+      return numPartitions;
     }
-  };
-
-  printf("test3 %d\n", numPartitions);
-  napi_status status = context->jsRouterFunction.BlockingCall(callback);
-  context->jsRouterFunction.Release();
-  if (status != napi_ok) {
+  } catch (const Napi::Error &e) {
+    fprintf(stderr, "Error in custom message router: %s\n", e.what());
     return numPartitions;
   }
-  return future.get();
 }
 
-ProducerConfig::ProducerConfig(const Napi::Object& producerConfig) : topic("") {
+ProducerConfig::ProducerConfig(const Napi::Object &producerConfig) : topic("") {
   this->cProducerConfig = std::shared_ptr<pulsar_producer_configuration_t>(
       pulsar_producer_configuration_create(), pulsar_producer_configuration_free);
 
@@ -218,7 +206,7 @@ ProducerConfig::ProducerConfig(const Napi::Object& producerConfig) : topic("") {
   }
 
   if (producerConfig.Has(CFG_SCHEMA) && producerConfig.Get(CFG_SCHEMA).IsObject()) {
-    SchemaInfo* schemaInfo = new SchemaInfo(producerConfig.Get(CFG_SCHEMA).ToObject());
+    SchemaInfo *schemaInfo = new SchemaInfo(producerConfig.Get(CFG_SCHEMA).ToObject());
     schemaInfo->SetProducerSchema(this->cProducerConfig);
     delete schemaInfo;
   }
@@ -268,37 +256,38 @@ ProducerConfig::ProducerConfig(const Napi::Object& producerConfig) : topic("") {
   if (PRODUCER_BATCHING_TYPE.count(batchingType)) {
     this->cProducerConfig.get()->conf.setBatchingType(PRODUCER_BATCHING_TYPE.at(batchingType));
   }
-  
+
   if (producerConfig.Has(CFG_MESSAGE_ROUTER)) {
     Napi::Value routerValue = producerConfig.Get(CFG_MESSAGE_ROUTER);
-    Napi::Function routerFunc; 
-                                
+    Napi::FunctionReference routerFunc;
+
     // Case 1: User passed a function directly, e.g., messageRouter: (msg, meta) => 0
     if (routerValue.IsFunction()) {
-      routerFunc = routerValue.As<Napi::Function>();
+      routerFunc = Napi::Persistent(routerValue.As<Napi::Function>());
     }
     // Case 2: User passed an object, e.g., messageRouter: { getPartition: (msg, meta) => 0 }
     else if (routerValue.IsObject()) {
       Napi::Object jsRouter = routerValue.As<Napi::Object>();
       if (jsRouter.Has(CFG_MESSAGE_ROUTER_GET_PARTITION_METHOD) &&
           jsRouter.Get(CFG_MESSAGE_ROUTER_GET_PARTITION_METHOD).IsFunction()) {
-        routerFunc = jsRouter.Get(CFG_MESSAGE_ROUTER_GET_PARTITION_METHOD).As<Napi::Function>();
+        routerFunc =
+            Napi::Persistent(jsRouter.Get(CFG_MESSAGE_ROUTER_GET_PARTITION_METHOD).As<Napi::Function>());
       }
     }
 
     // If we found a valid function from either case, set it up.
     if (routerFunc) {
       auto context = new MessageRouterContext();
-      context->jsRouterFunction =
-          Napi::ThreadSafeFunction::New(producerConfig.Env(), routerFunc, "MessageRouterCallback", 0, 1);
+      context->routerFunc = std::move(routerFunc);
       this->routerContext.reset(context);
-      pulsar_producer_configuration_set_message_router(
-          this->cProducerConfig.get(), messageRouterTrampoline, this->routerContext.get());
+      pulsar_producer_configuration_set_message_router(this->cProducerConfig.get(), messageRouterTrampoline,
+                                                       this->routerContext.get());
     } else {
-      Napi::TypeError::New(producerConfig.Env(), "The 'messageRouter' option must be a function, or an "
+      Napi::TypeError::New(producerConfig.Env(),
+                           "The 'messageRouter' option must be a function, or an "
                            "object with a 'getPartition' method.")
           .ThrowAsJavaScriptException();
-      return; 
+      return;
     }
   }
 }
