@@ -110,9 +110,6 @@ Napi::Value Producer::Send(const Napi::CallbackInfo &info) {
   auto deferred = ThreadSafeDeferred::New(Env());
   auto ctx = new ProducerSendContext(deferred, cMessage);
   
-  pulsar_message_set_property()
-  
-
   pulsar_producer_send_async(
       this->cProducer.get(), cMessage.get(),
       [](pulsar_result result, pulsar_message_id_t *msgId, void *ctx) {
