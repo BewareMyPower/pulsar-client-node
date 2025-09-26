@@ -92,19 +92,19 @@ struct MessageRouterContext {
 
 static int messageRouterTrampoline(pulsar_message_t *msg, pulsar_topic_metadata_t *topicMetadata,
                                    void *ctx) {
-  printf("test1");
+  printf("test1\n");
   MessageRouterContext *context = static_cast<MessageRouterContext *>(ctx);
   int numPartitions = pulsar_topic_metadata_get_num_partitions(topicMetadata);
   std::promise<int> promise;
   std::future<int> future = promise.get_future();
   auto callback = [msg, numPartitions, &promise](Napi::Env env, Napi::Function jsCallback) {
-    printf("test2");
+    printf("test2\n");
     Napi::Object jsMessage = Message::NewInstance(Napi::Object::New(env), 
                                                   std::shared_ptr<pulsar_message_t>(msg, [](pulsar_message_t*){}));
     Napi::Object jsTopicMetadata = Napi::Object::New(env);
     jsTopicMetadata.Set("numPartitions", Napi::Number::New(env, numPartitions));
     try {
-      printf("test3");
+      printf("test3\n");
       Napi::Value result = jsCallback.Call({jsMessage, jsTopicMetadata});
       if (result.IsNumber()) {
         promise.set_value(result.As<Napi::Number>().Int32Value());
@@ -117,7 +117,7 @@ static int messageRouterTrampoline(pulsar_message_t *msg, pulsar_topic_metadata_
     }
   };
 
-  printf("test3 %d", numPartitions);
+  printf("test3 %d\n", numPartitions);
   napi_status status = context->jsRouterFunction.BlockingCall(callback);
   context->jsRouterFunction.Release();
   if (status != napi_ok) {
